@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { ChefHat, Check, ArrowLeft, ArrowRight, ShoppingCart, Utensils } from 'lucide-react';
+import { ChefHat, Check, ArrowLeft, ArrowRight, ShoppingCart, Utensils, Loader2 } from 'lucide-react';
 
 const SmartGroceryApp = () => {
   const [currentStep, setCurrentStep] = useState(1);
+  const [loading, setLoading] = useState(false);
   const [preferences, setPreferences] = useState({
     calories: 2000,
     cuisine: '',
@@ -11,11 +12,51 @@ const SmartGroceryApp = () => {
     cravings: '',
     notes: ''
   });
+  const [aiSuggestions, setAiSuggestions] = useState(null);
   const [selectedMeals, setSelectedMeals] = useState([]);
   const [availableIngredients, setAvailableIngredients] = useState(new Set());
+  const [missingIngredients, setMissingIngredients] = useState([]);
 
-  // AI Önerileri (Mock data)
-  const aiSuggestions = {
+  const cuisineOptions = [
+    { id: 'turkish', label: 'Türk Mutfağı', icon: '🇹🇷' },
+    { id: 'italian', label: 'İtalyan', icon: '🇮🇹' },
+    { id: 'asian', label: 'Asya', icon: '🥢' },
+    { id: 'mediterranean', label: 'Akdeniz', icon: '🫒' }
+  ];
+
+  // API'den yemek önerilerini al
+  const fetchMealSuggestions = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('http://localhost:5000/api/meals/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          preferences: preferences
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setAiSuggestions(data);
+      } else {
+        console.error('API Error:', response.status);
+        // Fallback data
+        setAiSuggestions(getFallbackSuggestions());
+      }
+    } catch (error) {
+      console.error('Fetch Error:', error);
+      // Fallback data
+      setAiSuggestions(getFallbackSuggestions());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fallback data (API çalışmazsa)
+  const getFallbackSuggestions = () => ({
     starter: [
       { 
         id: 1, 
@@ -56,15 +97,51 @@ const SmartGroceryApp = () => {
         ingredients: ["pirinç", "tereyağı", "tuz", "su"],
         description: "Klasik Türk pilavı"
       }
+    ],
+    dessert: [
+      {
+        id: 6,
+        name: "Sütlaç",
+        calories: 200,
+        ingredients: ["süt", "pirinç", "şeker", "tarçın"],
+        description: "Geleneksel Türk tatlısı"
+      }
     ]
-  };
+  });
 
-  const cuisineOptions = [
-    { id: 'turkish', label: 'Türk Mutfağı', icon: '🇹🇷' },
-    { id: 'italian', label: 'İtalyan', icon: '🇮🇹' },
-    { id: 'asian', label: 'Asya', icon: '🥢' },
-    { id: 'mediterranean', label: 'Akdeniz', icon: '🫒' }
-  ];
+  // Eksik malzemeleri hesapla
+  const calculateMissingIngredients = async () => {
+    if (selectedMeals.length === 0) return;
+
+    try {
+      const response = await fetch('http://localhost:5000/api/ingredients/missing', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ai_response: JSON.stringify(selectedMeals),
+          pantry: Array.from(availableIngredients)
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setMissingIngredients(data.missing_ingredients || []);
+      }
+    } catch (error) {
+      console.error('Missing ingredients API Error:', error);
+      // Manuel hesaplama
+      const allIngredients = new Set();
+      selectedMeals.forEach(meal => 
+        meal.ingredients.forEach(ingredient => allIngredients.add(ingredient))
+      );
+      const missing = Array.from(allIngredients).filter(ingredient => 
+        !availableIngredients.has(ingredient)
+      );
+      setMissingIngredients(missing);
+    }
+  };
 
   const handleMealSelect = (meal) => {
     setSelectedMeals(prev => {
@@ -95,14 +172,20 @@ const SmartGroceryApp = () => {
     return Array.from(all);
   };
 
-  const getMissingIngredients = () => {
-    return getAllIngredients().filter(ingredient => 
-      !availableIngredients.has(ingredient)
-    );
-  };
-
-  const nextStep = () => {
-    if (currentStep < 4) setCurrentStep(prev => prev + 1);
+  const nextStep = async () => {
+    if (currentStep === 1 && preferences.cuisine) {
+      // Step 2'ye geçerken API'den veri çek
+      await fetchMealSuggestions();
+    }
+    
+    if (currentStep === 2 && selectedMeals.length > 0) {
+      // Step 3'e geçerken eksik malzemeleri hesapla
+      await calculateMissingIngredients();
+    }
+    
+    if (currentStep < 4) {
+      setCurrentStep(prev => prev + 1);
+    }
   };
 
   const prevStep = () => {
@@ -110,12 +193,12 @@ const SmartGroceryApp = () => {
   };
 
   const isNextDisabled = () => {
-    if (currentStep === 1) return !preferences.cuisine;
+    if (currentStep === 1) return !preferences.cuisine || loading;
     if (currentStep === 2) return selectedMeals.length === 0;
     return false;
   };
 
-  // Step 1: Tercihler
+  // Step 1: Tercihler (değişiklik yok)
   const renderStep1 = () => (
     <div style={styles.stepContainer}>
       <div style={styles.stepHeader}>
@@ -214,21 +297,31 @@ const SmartGroceryApp = () => {
     </div>
   );
 
-  // Step 2: Yemek Seçimi
+  // Step 2: Yemek Seçimi (güncellendi)
   const renderStep2 = () => (
     <div style={styles.stepContainer}>
       <div style={styles.stepHeader}>
         <ChefHat style={styles.stepIcon} />
         <h2 style={styles.stepTitle}>AI Yemek Önerileri</h2>
-        <p style={styles.stepSubtitle}>Tercihlerinize uygun yemekleri seçin</p>
+        <p style={styles.stepSubtitle}>
+          {loading ? 'AI yemek önerileri hazırlanıyor...' : 'Tercihlerinize uygun yemekleri seçin'}
+        </p>
       </div>
 
-      {Object.entries(aiSuggestions).map(([category, meals]) => (
+      {loading && (
+        <div style={styles.loadingContainer}>
+          <Loader2 style={styles.loadingIcon} />
+          <p>Tercihlerinize göre özel yemek önerileri hazırlanıyor...</p>
+        </div>
+      )}
+
+      {!loading && aiSuggestions && Object.entries(aiSuggestions).map(([category, meals]) => (
         <div key={category} style={styles.card}>
           <h3 style={styles.categoryTitle}>
             {category === 'starter' && '🥣 Başlangıç'}
             {category === 'main' && '🍽️ Ana Yemek'}
             {category === 'side' && '🥗 Yan Yemek'}
+            {category === 'dessert' && '🍰 Tatlı'}
           </h3>
           
           <div style={styles.mealsGrid}>
@@ -259,7 +352,7 @@ const SmartGroceryApp = () => {
         </div>
       ))}
 
-      {selectedMeals.length > 0 && (
+      {!loading && selectedMeals.length > 0 && (
         <div style={styles.summaryCard}>
           <h4 style={styles.summaryTitle}>Seçilen Yemekler:</h4>
           <div style={styles.selectedMeals}>
@@ -277,7 +370,7 @@ const SmartGroceryApp = () => {
     </div>
   );
 
-  // Step 3: Malzeme Kontrolü
+  // Step 3: Malzeme Kontrolü (güncellendi)
   const renderStep3 = () => (
     <div style={styles.stepContainer}>
       <div style={styles.stepHeader}>
@@ -306,11 +399,11 @@ const SmartGroceryApp = () => {
         </div>
       ))}
 
-      {getMissingIngredients().length > 0 && (
+      {missingIngredients.length > 0 && (
         <div style={styles.missingCard}>
           <h4 style={styles.missingTitle}>🛒 Eksik Malzemeler:</h4>
           <div style={styles.missingIngredients}>
-            {getMissingIngredients().map(ingredient => (
+            {missingIngredients.map(ingredient => (
               <span key={ingredient} style={styles.missingTag}>
                 {ingredient}
               </span>
@@ -321,7 +414,7 @@ const SmartGroceryApp = () => {
     </div>
   );
 
-  // Step 4: Online Sipariş
+  // Step 4: Online Sipariş (güncellendi)
   const renderStep4 = () => (
     <div style={styles.stepContainer}>
       <div style={styles.stepHeader}>
@@ -330,7 +423,7 @@ const SmartGroceryApp = () => {
         <p style={styles.stepSubtitle}>Eksik malzemelerinizi online olarak sipariş edin</p>
       </div>
 
-      {getMissingIngredients().length === 0 ? (
+      {missingIngredients.length === 0 ? (
         <div style={styles.successCard}>
           <Check style={styles.successIcon} />
           <h3 style={styles.successTitle}>Tebrikler!</h3>
@@ -350,7 +443,7 @@ const SmartGroceryApp = () => {
             </div>
             
             <div style={styles.ingredientsList}>
-              {getMissingIngredients().map(ingredient => (
+              {missingIngredients.map(ingredient => (
                 <div key={ingredient} style={styles.ingredientItem}>
                   <span>{ingredient}</span>
                 </div>
@@ -374,7 +467,7 @@ const SmartGroceryApp = () => {
             </div>
             
             <div style={styles.ingredientsList}>
-              {getMissingIngredients().map(ingredient => (
+              {missingIngredients.map(ingredient => (
                 <div key={ingredient} style={styles.ingredientItem}>
                   <span>{ingredient}</span>
                 </div>
@@ -393,7 +486,7 @@ const SmartGroceryApp = () => {
         <div style={styles.summaryStats}>
           <p>Seçilen yemek sayısı: {selectedMeals.length}</p>
           <p>Toplam kalori: {selectedMeals.reduce((sum, meal) => sum + meal.calories, 0)} kcal</p>
-          <p>Eksik malzeme sayısı: {getMissingIngredients().length}</p>
+          <p>Eksik malzeme sayısı: {missingIngredients.length}</p>
         </div>
       </div>
     </div>
@@ -477,6 +570,22 @@ const SmartGroceryApp = () => {
       height: '100%',
       backgroundColor: '#2563eb',
       transition: 'width 0.3s ease'
+    },
+    loadingContainer: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      padding: '40px',
+      backgroundColor: 'white',
+      borderRadius: '8px',
+      marginBottom: '20px'
+    },
+    loadingIcon: {
+      width: '48px',
+      height: '48px',
+      color: '#2563eb',
+      marginBottom: '16px',
+      animation: 'spin 1s linear infinite'
     },
     stepContainer: {
       marginBottom: '40px'
@@ -893,8 +1002,9 @@ const SmartGroceryApp = () => {
               ...(currentStep === 4 || isNextDisabled() ? styles.navButtonDisabled : styles.navButtonPrimary)
             }}
           >
-            <span>{currentStep === 4 ? 'Tamamlandı' : 'İleri'}</span>
-            {currentStep !== 4 && <ArrowRight style={{width: '16px', height: '16px'}} />}
+            {loading && <Loader2 style={{width: '16px', height: '16px', animation: 'spin 1s linear infinite'}} />}
+            <span>{currentStep === 4 ? 'Tamamlandı' : loading ? 'Yükleniyor...' : 'İleri'}</span>
+            {currentStep !== 4 && !loading && <ArrowRight style={{width: '16px', height: '16px'}} />}
           </button>
         </div>
       </div>
